@@ -11,22 +11,18 @@ local function update()
 	-- 	progName = progName .. ".lua"
 	-- end
 
-    -- create temporary helper file
-	local f = io.open("_packman_temp.lua", "w")
-    f:write([[
-local request = http.get("]] .. baseUrl .. [[packman.lua")
-if request == nil then
-    print("fatal error, could not download the required files.")
-else
-    local f = io.open("]] .. progName .. [[", "w")
-    f.write(request.readAll())
-    f:close()
-    request.close()
-end
+    local request = http.get(baseUrl .. "packman.lua")
+    if request == nil then
+        print("fatal error, could not download the required files.")
+    else
+        -- create temporary helper file to download new version
+        local f = io.open("_packman_temp.lua", "w")
+        f.write(request.readAll())
+        f:close()
 
-os.execute("]] .. progName ..  [[ _finalizeUpdate")]])
+        shell.execute("move _packman_temp.lua " .. progName)
+    end
 end
-
 
 local function handleArguments(args, options)
 	if args[1] == "_finalizeUpdate" then
@@ -51,5 +47,5 @@ local function handleArguments(args, options)
 end
 
 
-local args, options = shell.parse(...)
+local args, options = {...}
 handleArguments(args, options)
