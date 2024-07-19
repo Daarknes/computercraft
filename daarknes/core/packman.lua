@@ -28,12 +28,17 @@ local function update()
 end
 
 local function checkVersion()
-    local request, errormsg, failResponse = http.get({url = baseUrl .. "daarknes/core/packman.lua", method = "HEAD"})
+    local request, errormsg, failResponse = http.get({url = "https://github.com/Daarknes/computercraft/blob/main/daarknes/core/packman.lua", method = "HEAD"})
     if request == nil then
         print(errormsg)
         print(failResponse)
     else
-        print(request.readAll())
+        -- for k, v in pairs(request) do
+        --     print(k, v)
+        -- end
+        for k, v in pairs(request.getResponseHeaders()) do
+            print(k, v)
+        end
         request.close()
     end
 end
@@ -41,10 +46,14 @@ end
 local packman = {}
 
 function packman:Main(...)
-    local parser = argparse:Parser("packman", "Package Manager for Computercraft Programs")
+    local parser = argparse:Parser("packman", "Daarknes' OpenComputers library and program manager.")
     local parserUpdate = parser:AddSubParser("update", "Download the newest version of the package manager.")
 
-    checkVersion()
+    local args = parser:Parse({...})
+
+    if args.packman_action == "update" then
+        update()
+    end
 end
 
 return packman

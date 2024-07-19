@@ -1,9 +1,5 @@
 local argparse = {}
 
--- the program arguments specified by the user
-local posArgs = {}
-local kwArgs = {help = {name = "help", description = "Show this help.", default = false}}
-
 
 --[[
     Creates a (sub-)parser for command line arguments.
@@ -14,7 +10,7 @@ function argparse:Parser(progName, description)
         description = description,
         posArgs = {},
         subParsers = {},
-        kwArgs = {help = {name = "help", description = "Show this help.", default = false}},
+        kwArgs = {},
     }
 
     function parser:AddSubParser(name, description)
@@ -35,7 +31,7 @@ function argparse:Parser(progName, description)
 
         table.insert(self.posArgs, {
             name = name,
-            desciption = description,
+            description = description,
             type = argType
         })
     end
@@ -59,12 +55,12 @@ function argparse:Parser(progName, description)
 
         self.kwArgs[name] = {
             name = name,
-            desciption = desciption,
+            description = description,
             default = default
         }
     end
 
-    function parser:Parse(callArgs, args)
+    function parser:Parse(callArgs, _args)
         local i = 1
         local nArgs = #callArgs
         local iPos = 0
@@ -72,10 +68,10 @@ function argparse:Parser(progName, description)
         local nRequired = #self.posArgs + (hasSubparsers and 1 or 0)
         
         -- output table
-        local args = args or {}
+        local _args = _args or {}
         -- fill the output table with the default values
         for kwname, entry in pairs(self.kwArgs) do
-            args[kwname] = entry.default
+            _args[kwname] = entry.default
         end
     
         while i <= nArgs do
@@ -84,12 +80,16 @@ function argparse:Parser(progName, description)
             -- argument starts with `--` -> keyword argument
             local _, _, kwname = string.find(arg, "%-%-(.*)")
             if kwname then
+                if kwname == "help" then
+                    self:ShowHelp()
+                    return
+                end
                 if self.kwArgs[kwname] == nil then
                     error(string.format("Supplied argument `--%s` is not valid.", kwname), 2)
                 end
                 -- a boolean argument has no further parameter
                 if type(self.kwArgs[kwname].default) == "boolean" then
-                    args[kwname] = true
+                    _args[kwname] = true
                 else
                     if i + 1 > n then
                         error(string.format("Missing parameter for argument `%s`", kwname), 2)
@@ -99,7 +99,7 @@ function argparse:Parser(progName, description)
                     if type(self.kwArgs[kwname].default) == "number" then
                         value = tonumber(value)
                     end
-                    args[kwname] = value
+                    _args[kwname] = value
     
                     i = i + 1
                 end
@@ -110,8 +110,8 @@ function argparse:Parser(progName, description)
                     -- pass remaining arguments to subparser
                     if hasSubparsers then
                         if self.subParsers[arg] then
-                            args[self.progName .. ".subParser"] = arg
-                            self.subParsers[arg]:Parse({select(i+1, table.unpack(callArgs))}, args)
+                            _args[self.progName .. "_action"] = arg
+                            self.subParsers[arg]:Parse({select(i+1, table.unpack(callArgs))}, _args)
                             break
                         else
                             error(string.format("No subparser with name `%s`.", arg), 2)
@@ -122,11 +122,11 @@ function argparse:Parser(progName, description)
                 else
                     local posArg = self.posArgs[iPos]
                     if posArg.type == "number" then
-                        args[posArg.name] = tonumber(arg)
+                        _args[posArg.name] = tonumber(arg)
                     elseif posArg.type == "boolean" then
-                        args[posArg.name] = arg == "true" and true or false
+                        _args[posArg.name] = arg == "true" and true or false
                     else
-                        args[posArg.name] = arg
+                        _args[posArg.name] = arg
                     end
                 end
             end
@@ -137,32 +137,91 @@ function argparse:Parser(progName, description)
             error("Missing required argument(s)", 2)
         end
     
-        return args
+        return _args
+    end
+
+    -- we have to build the help from deepest subparser to highest
+    function parser:ShowHelp(info)
+        local isLowest = info == nil
+        -- the info table is provided to the parent to fill it further. Everything is added in reverse
+        info = info or {
+            signature = "",
+            positional = {},
+            optional = {}
+        }
+        
+        local signature = self.progName
+
+        for _, entry in ipairs(self.posArgs) do
+            table.insert(info.positional, {name = entry.name, description = entry.description})
+            signature = signature .. " <" .. entry.name .. ">"
+        end
+
+        for _, entry in pairs(self.kwArgs) do
+            if type(entry.default) == "boolean" then
+                table.insert(info.optional, {name = "--" .. entry.name, description = entry.description})
+                signature = signature .. " [--" .. entry.name .. "]"
+            else
+                table.insert(info.optional, {name = "--" .. entry.name .. " .", description = entry.description})
+                signature = signature .. " [--" .. entry.name .. " .]"
+            end
+        end
+
+        if isLowest then
+            table.insert(info.optional, {name = "--help", description = "Show this help."})
+            signature = signature .. " [--help]"
+        end
+
+        -- only add subparser parameters when this is the deepest ShowHelp call
+        if isLowest and next(self.subParsers) ~= nil then
+            local options = {}
+            for name, subParser in pairs(self.subParsers) do
+                table.insert(options, subParser.progName)
+                table.insert(info.positional, {name = subParser.progName, description = subParser.description})
+            end
+
+            signature = signature .. " {" .. table.concat(options, ", ") .. "}"
+        end
+
+        info.signature = signature .. " " .. info.signature
+
+        -- backtrack to parent parser
+        if self.parent ~= nil then
+            self.parent:ShowHelp(info)
+        -- this is the top-level parser -> build message and print it
+        else
+            local msg = self.description .. "\nusage: " .. info.signature .. "\n"
+
+            if next(info.positional) ~= nil then
+                local maxLen = 1
+                for _, entry in ipairs(info.positional) do
+                    maxLen = math.max(maxLen, string.len(entry.name))
+                end
+
+                msg = msg .. "\npositional arguments:\n"
+                for _, entry in ipairs(info.positional) do
+                    msg = msg .. "  " .. string.format("%-" .. maxLen .. "s", entry.name) .. "  " .. entry.description .. "\n"
+                end
+            end
+
+            if next(info.optional) ~= nil then
+                local maxLen = 1
+                for _, entry in ipairs(info.optional) do
+                    maxLen = math.max(maxLen, string.len(entry.name))
+                end
+
+                msg = msg .. "\noptional arguments:\n"
+                for _, entry in ipairs(info.optional) do
+                    msg = msg .. "  " .. string.format("%-" .. maxLen .. "s", entry.name) .. "  " .. entry.description .. "\n"
+                end
+            end
+
+            print(msg)
+        end
     end
 
 	return parser
 end
 
-
-function argparse:Help()
-    local msg = [[Daarknes' OpenComputers library and program manager.
-Usage:
-]]
-    for _, entry in ipairs(posArgs) do
-        if entry.default == nil then
-            msg = msg .. " <" .. entry.name .. ">"
-        else
-            msg = msg .. " [" .. entry.name .. "]"
-        end
-    end
-
-    for _, entry in pairs(kwArgs) do
-        if type(entry.default) == "boolean" then
-            msg = msg .. " --" .. entry.name
-        else
-            msg = msg .. " --" .. entry.name .. " ."
-        end
-    end
-end
 
 return argparse
